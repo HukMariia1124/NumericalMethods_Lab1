@@ -287,7 +287,8 @@ namespace Lab1
             double f0 = SolveFunction(expr, x0);
             double f1 = SolveFunction(expr, x1);
             int iteration = 0;
-
+            if (Math.Abs(f0) < eps) return x0;
+            if (Math.Abs(f1) < eps) return x1;
             //while (Math.Abs(f1) > eps)
             while (Math.Abs(x1-x0) > eps)
             {
