@@ -1,4 +1,8 @@
 ﻿using NCalc;
+using OxyPlot;
+using OxyPlot.Annotations;
+using OxyPlot.Axes;
+using OxyPlot.Series;
 using System.Drawing.Imaging.Effects;
 using System.Globalization;
 using System.Text;
@@ -28,7 +32,15 @@ namespace Lab1
         double SolveFunction(string expr, double x)
         {
             NCalc.Expression e = new NCalc.Expression(expr);
+            e.EvaluateFunction += delegate (string name, NCalc.FunctionArgs args)
+            {
+                if (name == "Abs")
+                {
+                    args.Result = Math.Abs(Convert.ToDouble(args.Parameters[0].Evaluate()));
+                }
+            };
             e.Parameters["x"] = x;
+            e.Parameters["PI"] = Math.PI;
             return Convert.ToDouble(e.Evaluate(), CultureInfo.InvariantCulture);
         }
         /// Основна логіка обробки кліку на кнопку "Розв'язати"
@@ -123,6 +135,7 @@ namespace Lab1
                 res.Text += "=== РЕЗУЛЬТАТИ ===\n";
                 res.Text += $"Знайдено унікальних коренів: {roots.Count}\n";
                 res.Text += "Корені: " + string.Join("; ", roots.Select(r => Math.Round(r, decimals))) + "\n";
+                DrawGraph(expr, a, b, roots);
             }
             catch (Exception ex)
             {
@@ -166,7 +179,7 @@ namespace Lab1
 
                     string derivativeInfo;
                     bool derivChange = DerivativeChangesSign(expr, left, right, out derivativeInfo, decimals);
-                    bool signChange = FunctionChangesSign(expr, left, right, eps);
+                    bool signChange = FunctionChangesSign(expr, left, right);
 
                     if (derivChange)
                     {
@@ -179,7 +192,21 @@ namespace Lab1
                         }
                         else
                         {
-                            res.Text += $" → Відкинуто (малий)\n";
+                            // Інтервал звузився до мінімуму. Перевіримо значення функції в центрі.
+                            double mid = (left + right) / 2.0;
+                            double fMid = SolveFunction(expr, mid);
+
+                            // Якщо в екстремумі функція близька до нуля - це корінь (дотик)
+                            if (Math.Abs(fMid) <= eps)
+                            {
+                                res.Text += $" → Знайдено корінь дотику! Відправлено на уточнення\n";
+                                result.Add((left, right));
+                                foundInThisInterval++;
+                            }
+                            else
+                            {
+                                res.Text += $" → Відкинуто (екстремум не на осі)\n";
+                            }
                         }
                     }
                     else
@@ -206,7 +233,7 @@ namespace Lab1
 
             return result;
         }
-        // Перевіряємо зміну знаку похідної на інтервалі
+        // Перевіряємо зміну знака похідної на інтервалі
         bool DerivativeChangesSign(string expr, double a, double b, out string derivativeInfo, int decimals)
         {
             int points = 5;
@@ -240,24 +267,18 @@ namespace Lab1
             derivativeInfo = info.ToString();
             return signChanged;
         }
-        // Перевіряємо зміну знаку функції на інтервалі
-        bool FunctionChangesSign(string expr, double a, double b, double eps)
+        // Перевіряємо зміну знака функції на інтервалі
+        bool FunctionChangesSign(string expr, double a, double b)
         {
             double f1 = SolveFunction(expr, a);
             double f2 = SolveFunction(expr, b);
 
-            if (Math.Abs(f1) < eps)
-                return true;
-
-            if (Math.Abs(f2) < eps)
-                return true;
-
-            return f1 * f2 < 0;
+            return f1 * f2 <= 0;
         }
         // Чисельне наближення похідної в точці x
         double Derivative(string expr, double x)
         {
-            double dx = 0.05;
+            double dx = 0.001;
             return (SolveFunction(expr, x + dx) - SolveFunction(expr, x)) / dx;
         }
         // Метод січних для уточнення кореня на інтервалі [x0, x1]
@@ -319,8 +340,26 @@ namespace Lab1
             return expr;
         }
 
+        private void InsertTextAtCursor(string text)
+        {
+            if (activeBox != null)
+            {
+                int caretIndex = activeBox.CaretIndex;
+                activeBox.Text = activeBox.Text.Insert(caretIndex, text);
+                activeBox.CaretIndex = caretIndex + text.Length;
+                activeBox.Focus();
+            }
+        }
 
-        
+        private char? GetCharBeforeCursor()
+        {
+            if (activeBox != null && activeBox.CaretIndex > 0)
+            {
+                return activeBox.Text[activeBox.CaretIndex - 1];
+            }
+            return null;
+        }
+
         private void Clear_Click(object sender, RoutedEventArgs e)
         {
             if (activeBox != null)
@@ -331,31 +370,29 @@ namespace Lab1
 
         private void Backspace_Click(object sender, RoutedEventArgs e)
         {
-            if (activeBox != null)
+            if (activeBox != null && activeBox.CaretIndex > 0)
             {
-                if (activeBox.Text.Length == 0)
-                    return;
-
-                activeBox.Text = activeBox.Text.Remove(activeBox.Text.Length - 1);
+                int caretIndex = activeBox.CaretIndex;
+                activeBox.Text = activeBox.Text.Remove(caretIndex - 1, 1);
+                activeBox.CaretIndex = caretIndex - 1;
+                activeBox.Focus();
             }
         }
 
         private void AddText_Click(object sender, RoutedEventArgs e)
         {
-            if (activeBox != null)
-            {
-                activeBox.Text += (sender as Button)!.Content.ToString();
-            }
+            InsertTextAtCursor((sender as Button)!.Content.ToString());
         }
 
         private void Special_Click(object sender, RoutedEventArgs e)
         {
             if (activeBox != null)
             {
-                if (activeBox.Text.Length != 0 && ".".Contains(activeBox.Text.Last()))
+                char? prevChar = GetCharBeforeCursor();
+                if (prevChar == '.')
                     return;
             
-                activeBox.Text += (sender as Button).Content.ToString();
+                InsertTextAtCursor((sender as Button)!.Content.ToString());
             }
         }
 
@@ -363,56 +400,169 @@ namespace Lab1
         {
             if (activeBox != null)
             {
-                if (activeBox.Text.Length == 0)
+                if (activeBox.CaretIndex == 0)
                     return;
-                if ("+-*/.".Contains(activeBox.Text.Last()))
+                
+                char? prevChar = GetCharBeforeCursor();
+                if (prevChar.HasValue && "+-*/.".Contains(prevChar.Value))
                     return;
 
-                activeBox.Text += (sender as Button)!.Content.ToString();
+                InsertTextAtCursor((sender as Button)!.Content.ToString());
             }
         }
+
         private void Minus_Click(object sender, RoutedEventArgs e)
         {
             if (activeBox != null)
             {
-                if (activeBox.Text.Length != 0 && "+-*/.".Contains(activeBox.Text.Last()))
+                char? prevChar = GetCharBeforeCursor();
+                if (prevChar.HasValue && "+-*/.".Contains(prevChar.Value))
                     return;
 
-                activeBox.Text += (sender as Button)!.Content.ToString();
+                InsertTextAtCursor((sender as Button)!.Content.ToString());
             }
         }
 
         private void Function_Click(object sender, RoutedEventArgs e)
         {
-            if (activeBox != null)
-            {
-                string func = (sender as Button)!.Content.ToString()!;
-                activeBox.Text += func + "(";
-            }
+            string func = (sender as Button)!.Content.ToString()!;
+            InsertTextAtCursor(func + "(");
         }
+        private void Log_Click(object sender, RoutedEventArgs e)
+        {
+            InsertTextAtCursor("Log(,");
+        }
+
 
         private void CloseBracket_Click(object sender, RoutedEventArgs e)
         {
-            if (activeBox != null && activeBox.Text.Length > 0 && !"+-*/(.".Contains(activeBox.Text.Last()))
+            if (activeBox != null)
             {
-                activeBox.Text += ")";
+                char? prevChar = GetCharBeforeCursor();
+                if (prevChar.HasValue && !"+-*/(.".Contains(prevChar.Value))
+                {
+                    InsertTextAtCursor(")");
+                }
             }
         }
+
         private void Point_Click(object sender, RoutedEventArgs e)
         {
             if (activeBox != null)
             {
-                if (activeBox.Text.Length == 0)
+                if (activeBox.CaretIndex == 0)
                     return;
-                if ("+-*/.".Contains(activeBox.Text.Last()))
+                
+                char? prevChar = GetCharBeforeCursor();
+                if (prevChar.HasValue && "+-*/.".Contains(prevChar.Value))
                     return;
-                activeBox.Text += ".";
+                    
+                InsertTextAtCursor(".");
             }
         }
+
+        private void Arrow_Click(object sender, RoutedEventArgs e)
+        {
+            if (activeBox != null && sender is Button btn)
+            {
+                string direction = btn.Content?.ToString();
+
+                // Move cursor left
+                if (direction == "←" && activeBox.CaretIndex > 0)
+                {
+                    activeBox.CaretIndex--;
+                }
+                // Move cursor right
+                else if (direction == "→" && activeBox.CaretIndex < activeBox.Text.Length)
+                {
+                    activeBox.CaretIndex++;
+                }
+
+                // Return focus to the TextBox so the user can see the blinking cursor
+                activeBox.Focus();
+            }
+        }
+
         TextBox activeBox = null;
         private void TextBox_Select(object sender, MouseButtonEventArgs e)
         {
             activeBox = sender as TextBox;
+        }
+
+        void DrawGraph(string expr, double a, double b, List<double> roots)
+        {
+            var model = new PlotModel 
+            { 
+                Title = "Графік функції",
+                PlotType = PlotType.Cartesian // Forces a 1:1 scale on the axes
+            };
+
+            model.Axes.Add(new LinearAxis
+            {
+                Position = AxisPosition.Bottom,
+                Title = "x",
+                Minimum = a,
+                Maximum = b,
+            });
+
+            model.Axes.Add(new LinearAxis
+            {
+                Position = AxisPosition.Left,
+                Title = "f(x)",
+                Minimum = -10,
+                Maximum = 10
+            });
+
+            var series = new LineSeries
+            {
+                Title = "f(x)",
+                StrokeThickness = 2,
+                Color = OxyColors.Purple
+            };
+
+            int points = 1000;
+            double step = (b - a) / points;
+
+            for (int i = 0; i <= points; i++)
+            {
+                double x = a + i * step;
+                double y = SolveFunction(expr, x);
+
+                if (!double.IsNaN(y) && !double.IsInfinity(y))
+                {
+                    series.Points.Add(new DataPoint(x, y));
+                }
+            }
+
+            model.Series.Add(series);
+            
+            var rootSeries = new ScatterSeries
+            {
+                Title = "Корені",
+                MarkerType = MarkerType.Circle,
+                MarkerSize = 4,
+                MarkerFill = OxyColors.Purple
+            };
+
+            foreach (double root in roots)
+            {
+                rootSeries.Points.Add(new ScatterPoint(root, 0));
+            }
+
+            model.Series.Add(rootSeries);
+            model.Annotations.Add(new LineAnnotation
+            {
+                Y = 0,
+                Type = LineAnnotationType.Horizontal,
+                Color = OxyColors.Gray
+            });
+            model.Annotations.Add(new LineAnnotation
+            {
+                X = 0,
+                Type = LineAnnotationType.Vertical,
+                Color = OxyColors.Gray
+            });
+            plotView.Model = model;
         }
     }
 }
